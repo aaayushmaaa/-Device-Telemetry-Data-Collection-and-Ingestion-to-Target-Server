@@ -1,0 +1,5 @@
+fastapi
+uvicorn
+minio
+psycopg2-binary
+python-dotenv
