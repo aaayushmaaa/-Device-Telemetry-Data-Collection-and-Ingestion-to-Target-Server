@@ -59,13 +59,15 @@ services:
   # -----------------------------
   airflow:
     build: ./airflow
+    env_file:
+      - .env
     container_name: telemetry_airflow
     depends_on:
       - postgres
       - minio
     environment:
       AIRFLOW__CORE__EXECUTOR: LocalExecutor
-      AIRFLOW__CORE__FERNET_KEY: "myOdezKmrp_4_3Gg0SFIO-22msGmjE5TnyYsxlIR4qU="
+      AIRFLOW__CORE__FERNET_KEY: ${FERNET_KEY}
       AIRFLOW__CORE__DAGS_ARE_PAUSED_AT_CREATION: "false"
       AIRFLOW__CORE__LOAD_EXAMPLES: "false"
       AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://telemetry:telemetry@postgres/telemetrydb
