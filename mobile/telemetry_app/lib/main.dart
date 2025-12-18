@@ -10,8 +10,19 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'package:uuid/uuid.dart';
 import 'package:http/http.dart' as http;
 import 'package:archive/archive.dart';
+import 'dart:io';
+
+class MyHttpOverrides extends HttpOverrides {
+  @override
+  HttpClient createHttpClient(SecurityContext? context) {
+    return super.createHttpClient(context)
+      ..badCertificateCallback =
+          (X509Certificate cert, String host, int port) => true;
+  }
+}
 
 void main() {
+  HttpOverrides.global = MyHttpOverrides();
   runApp(const MyApp());
 }
 
@@ -101,7 +112,7 @@ class _TelemetryPageState extends State<TelemetryPage> {
       // ------------------------
       // Send telemetry to ingestion API
       // ------------------------
-      final uri = Uri.parse("http://10.13.162.170:8000/ingest");
+      final uri = Uri.parse("https://10.13.162.170:8000/ingest");
 
       // Encode telemetry as JSON and compress with gzip
       final jsonData = jsonEncode(telemetry);

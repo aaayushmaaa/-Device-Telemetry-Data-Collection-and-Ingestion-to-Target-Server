@@ -39,6 +39,8 @@ services:
   ingestion-api:
     build: ./ingestion-api
     container_name: telemetry_ingestion_api
+    expose:
+      - "8000"
     restart: always
     environment:
       POSTGRES_HOST: postgres
@@ -51,8 +53,20 @@ services:
     depends_on:
       - postgres
       - minio
+
+  # -----------------------------
+  # Nginx (HTTPS Reverse Proxy)
+  # -----------------------------
+  nginx:
+    image: nginx:latest
+    container_name: telemetry_nginx
     ports:
-      - "8000:8000"
+      - "8000:443"
+    volumes:
+      - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./nginx/certs:/etc/nginx/certs:ro
+    depends_on:
+      - ingestion-api
 
   # -----------------------------
   # Airflow

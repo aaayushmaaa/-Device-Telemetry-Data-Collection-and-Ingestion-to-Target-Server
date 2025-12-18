@@ -4,11 +4,25 @@ import uuid
 import asyncio
 import io
 import os
+import asyncpg
 import hashlib
 
 from fastapi import FastAPI, Request, Header, HTTPException
 from minio import Minio
-import asyncpg
+from pydantic import BaseModel
+from typing import Dict, Any, Optional
+
+
+# -----------------------------
+# Pydantic payload schema
+# -----------------------------
+class TelemetryPayload(BaseModel):
+    device: Dict[str, Any]
+    battery: Dict[str, Any]
+    app: Dict[str, Any]
+    session: Dict[str, Any]
+    sensor: Optional[Dict[str, Any]] = {}
+    network: Optional[Dict[str, Any]] = {}
 
 
 # -----------------------------
@@ -16,7 +30,7 @@ import asyncpg
 # -----------------------------
 def tokenize(value: str) -> str:
     """
-    Minimal deterministic tokenization using SHA256.
+    Deterministic tokenization using SHA256
     Same input -> same token
     """
     return "tok_" + hashlib.sha256(value.encode()).hexdigest()
@@ -38,7 +52,7 @@ db_pool = None
 # -----------------------------
 # FastAPI app
 # -----------------------------
-app = FastAPI()
+app = FastAPI(title="Telemetry Ingestion API")
 
 
 # -----------------------------
@@ -59,7 +73,7 @@ minio_client = Minio(
 async def startup_event():
     global db_pool
 
-    # --- MinIO ---
+    # ---- MinIO ----
     for i in range(10):
         try:
             if not minio_client.bucket_exists(MINIO_BUCKET):
@@ -67,12 +81,12 @@ async def startup_event():
             print("✅ MinIO bucket ready")
             break
         except Exception as e:
-            print(f"Waiting for MinIO... attempt {i+1}: {e}")
+            print(f"⏳ Waiting for MinIO... attempt {i + 1}: {e}")
             await asyncio.sleep(3)
     else:
         raise RuntimeError("❌ Could not connect to MinIO")
 
-    # --- Postgres ---
+    # ---- Postgres ----
     try:
         db_pool = await asyncpg.create_pool(
             host=POSTGRES_HOST,
@@ -89,38 +103,50 @@ async def startup_event():
 # Ingest endpoint
 # -----------------------------
 @app.post("/ingest")
-async def ingest(request: Request, x_api_key: str = Header(None)):
+async def ingest(
+    request: Request,
+    x_api_key: str = Header(None)
+):
+    # ---- API key validation ----
     if x_api_key != "test123":
         raise HTTPException(status_code=401, detail="Invalid API Key")
 
+    # ---- Read raw body ----
     body = await request.body()
 
-    # Handle compressed / uncompressed JSON
+    # ---- Handle gzip or plain JSON ----
     try:
         raw_data = gzip.decompress(body).decode()
     except Exception:
         raw_data = body.decode()
 
+    # ---- JSON parse ----
     try:
-        obj = json.loads(raw_data)
+        parsed_json = json.loads(raw_data)
     except json.JSONDecodeError as e:
         raise HTTPException(status_code=400, detail=f"Invalid JSON: {str(e)}")
+
+    # ---- Pydantic validation ----
+    try:
+        payload = TelemetryPayload(**parsed_json)
+    except Exception as e:
+        raise HTTPException(status_code=422, detail=str(e))
+
+    obj = payload.dict()
 
     # -----------------------------
     # Tokenize sensitive fields
     # -----------------------------
-    if isinstance(obj, dict):
-        if "network" in obj:
-            network_str = json.dumps(obj["network"])
-            obj["network_token"] = tokenize(network_str)
-            del obj["network"]
-
-    tokenized_data = json.dumps(obj)
+    if "network" in obj and obj["network"]:
+        network_str = json.dumps(obj["network"], sort_keys=True)
+        obj["network_token"] = tokenize(network_str)
+        del obj["network"]
 
     # -----------------------------
     # Store raw telemetry in MinIO
     # -----------------------------
     object_name = f"telemetry/{uuid.uuid4()}.json"
+    tokenized_data = json.dumps(obj)
 
     try:
         minio_client.put_object(
@@ -155,5 +181,10 @@ async def ingest(request: Request, x_api_key: str = Header(None)):
             detail=f"Failed to insert into Postgres: {str(e)}"
         )
 
-    print("📥 Telemetry ingested:", obj)
+    # ---- Safe logging ----
+    print(
+        f"📥 Telemetry ingested | session={obj['session']['id']} "
+        f"| device={obj['device'].get('model')}"
+    )
+
     return {"status": "ok"}
