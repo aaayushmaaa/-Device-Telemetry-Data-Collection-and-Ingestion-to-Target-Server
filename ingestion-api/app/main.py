@@ -6,7 +6,9 @@ import io
 import os
 import asyncpg
 import hashlib
+import requests
 
+from datetime import datetime
 from fastapi import FastAPI, Request, Header, HTTPException
 from minio import Minio
 from pydantic import BaseModel
@@ -46,7 +48,30 @@ POSTGRES_PASSWORD = os.getenv("POSTGRES_PASSWORD", "telemetry")
 
 MINIO_BUCKET = "telemetry"
 
+AIRFLOW_URL = "http://telemetry_airflow:8080"
+AIRFLOW_USER = "admin"
+AIRFLOW_PASSWORD = "admin"
+
 db_pool = None
+
+
+# -----------------------------
+# Trigger Airflow DAG
+# -----------------------------
+def trigger_airflow_dag(dag_id: str):
+    url = f"{AIRFLOW_URL}/api/v1/dags/{dag_id}/dagRuns"
+
+    response = requests.post(
+        url,
+        auth=(AIRFLOW_USER, AIRFLOW_PASSWORD),
+        json={
+            "dag_run_id": f"flutter_{datetime.utcnow().isoformat()}"
+        },
+        timeout=10
+    )
+
+    if response.status_code not in (200, 201):
+        raise Exception(f"Airflow trigger failed: {response.text}")
 
 
 # -----------------------------
@@ -137,7 +162,7 @@ async def ingest(
     # -----------------------------
     # Tokenize sensitive fields
     # -----------------------------
-    if "network" in obj and obj["network"]:
+    if obj.get("network"):
         network_str = json.dumps(obj["network"], sort_keys=True)
         obj["network_token"] = tokenize(network_str)
         del obj["network"]
@@ -162,6 +187,25 @@ async def ingest(
         )
 
     # -----------------------------
+    # Register file as UNPROCESSED
+    # -----------------------------
+    try:
+        async with db_pool.acquire() as connection:
+            await connection.execute(
+                """
+                INSERT INTO telemetry_files (object_name, processed)
+                VALUES ($1, FALSE)
+                ON CONFLICT (object_name) DO NOTHING
+                """,
+                object_name
+            )
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to register telemetry file: {str(e)}"
+        )
+
+    # -----------------------------
     # Insert into Postgres staging
     # -----------------------------
     try:
@@ -181,10 +225,30 @@ async def ingest(
             detail=f"Failed to insert into Postgres: {str(e)}"
         )
 
-    # ---- Safe logging ----
+    # ---- Logging ----
     print(
         f"📥 Telemetry ingested | session={obj['session']['id']} "
         f"| device={obj['device'].get('model')}"
     )
 
-    return {"status": "ok"}
+    return {"status": "ok", "object_name": object_name}
+
+
+# -----------------------------
+# Start telemetry pipeline
+# -----------------------------
+@app.post("/start-telemetry")
+async def start_telemetry():
+    print("🔥 START TELEMETRY ENDPOINT HIT")
+
+    try:
+        trigger_airflow_dag("telemetry_raw_loader")
+        print("🚀 telemetry_raw_loader DAG triggered")
+    except Exception as e:
+        print("❌ Failed to trigger DAG:", str(e))
+        raise HTTPException(status_code=500, detail=str(e))
+
+    return {
+        "status": "pipeline_started",
+        "dag": "telemetry_raw_loader"
+    }

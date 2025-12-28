@@ -85,15 +85,35 @@ services:
       AIRFLOW__CORE__DAGS_ARE_PAUSED_AT_CREATION: "false"
       AIRFLOW__CORE__LOAD_EXAMPLES: "false"
       AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://telemetry:telemetry@postgres/telemetrydb
+      AIRFLOW__LOGGING__BASE_LOG_FOLDER: /opt/airflow/logs
+      AIRFLOW__LOGGING__DAG_PROCESSOR_MANAGER_LOG_LOCATION: /opt/airflow/logs/dag_processor_manager/dag_processor_manager.log
+      AIRFLOW__LOGGING__LOGGING_LEVEL: INFO
+      AIRFLOW__LOGGING__LOG_FETCH_TIMEOUT_SEC: 30
+      AIRFLOW__LOGGING__LOG_FETCH_DELAY_SEC: 2
+      AIRFLOW__API__AUTH_BACKEND: airflow.api.auth.backend.basic_auth
     volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
       - ./airflow/dags:/opt/airflow/dags
       - ./airflow/plugins:/opt/airflow/plugins
+      - ./airflow/logs:/opt/airflow/logs
     ports:
       - "8080:8080"
     command: >
       bash -c "airflow db init &&
                airflow users create --username admin --firstname Admin --lastname User --role Admin --email admin@example.com --password admin &&
                airflow webserver & airflow scheduler"
+
+  # -----------------------------
+  # Spark
+  # -----------------------------
+  spark:
+    build: ./spark
+    container_name: telemetry_spark
+    depends_on:
+      - postgres
+    volumes:
+      - ./spark/jobs:/opt/spark/jobs
+    command: tail -f /dev/null
 
 volumes:
   pgdata:

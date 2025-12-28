@@ -4,6 +4,7 @@ from datetime import datetime
 import psycopg2
 from psycopg2.extras import RealDictCursor
 from datetime import datetime
+from airflow.operators.trigger_dagrun import TriggerDagRunOperator
 
 POSTGRES_CONN = {
     "host": "postgres",
@@ -63,7 +64,7 @@ def transform_raw_events(**kwargs):
 with DAG(
     dag_id="telemetry_transform_dag",
     start_date=datetime(2024, 1, 1),
-    schedule_interval="@hourly",
+    schedule_interval=None,
     catchup=False
 ) as dag:
 
@@ -72,3 +73,9 @@ with DAG(
         python_callable=transform_raw_events,
         provide_context=True
     )
+    trigger_spark = TriggerDagRunOperator(
+        task_id="trigger_spark_analytics",
+        trigger_dag_id="telemetry_spark_analytics",
+    )
+
+transform_task >> trigger_spark
